@@ -33,18 +33,30 @@ from coderifts_verifier import (  # noqa: E402
 )
 
 VECTORS = json.loads((pathlib.Path(__file__).parent / "xlang-vectors.json").read_text())
-# MEASURED: keyring_from_document(doc, source) takes a source label too -- it
-# names where the registry came from, for the error text.
-KEYRING = keyring_from_document(
-    {"keys": [{"kid": VECTORS["kid"], "public_key_pem": VECTORS["public_key_pem"],
-               "status": "active"}]},
-    "tests/xlang-vectors.json",
-)
 BY_NAME = {v["name"]: v for v in VECTORS["vectors"]}
 
 
-def verdict(token):
-    r = verify_receipt(token, {"keyring": KEYRING})
+# MEASURED: keyring_from_document(doc, source) takes a source label too -- it
+# names where the registry came from, for the error text.
+def keyring_for(key=None):
+    """The registry the vector says was published for its kid.
+
+    Each vector carries its own ``key`` block (status, retired_at, revoked_at,
+    compromised_at), because the verdict depends on what the registry says about
+    the key and not only on the bytes. A single active keyring for the whole
+    corpus could only ever exercise signature and kid resolution -- never key
+    WITHDRAWAL, which is the class where implementations have diverged.
+    """
+    entry = {"kid": VECTORS["kid"], "public_key_pem": VECTORS["public_key_pem"]}
+    entry.update(key or {"status": "active"})
+    return keyring_from_document({"keys": [entry]}, "tests/xlang-vectors.json")
+
+
+KEYRING = keyring_for()
+
+
+def verdict(token, key=None):
+    r = verify_receipt(token, {"keyring": keyring_for(key)})
     return {"valid": r["valid"], "status": r["status"]}
 
 
@@ -53,7 +65,7 @@ class TestCrossLanguage:
     @pytest.mark.parametrize("name", sorted(BY_NAME))
     def test_python_verdict_matches_the_javascript_verdict(self, name):
         v = BY_NAME[name]
-        assert verdict(v["token"]) == v["js"], (
+        assert verdict(v["token"], v.get("key")) == v["js"], (
             f"{name}: Python and JavaScript disagree about this receipt"
         )
 
