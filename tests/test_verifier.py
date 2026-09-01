@@ -77,6 +77,34 @@ class TestCrossLanguage:
         assert "INVALID_SIGNATURE" in statuses
         assert "UNKNOWN_KEY" in statuses
 
+    def test_the_corpus_still_covers_key_withdrawal(self):
+        """The corpus cannot shrink back to signature-and-kid coverage.
+
+        Those three statuses were the whole corpus once, and a verifier that
+        accepted every revoked key passed against it -- which is how the class
+        went unnoticed in two implementations. Key WITHDRAWAL is the class this
+        corpus was extended to carry, so its absence is a regression in the
+        check itself, not merely fewer cases.
+        """
+        statuses = {v["js"]["status"] for v in VECTORS["vectors"]}
+        withdrawal = {
+            "REVOKED_KEY",
+            "REVOKED_KEY_UNDECIDABLE",
+            "KEY_REVOKED",
+            "KEY_RETIRED_AFTER_SIGNING",
+            "RETIRED_KEY_VALID_AT_ISSUE",
+            "UNKNOWN_KEY_STATUS",
+        }
+        missing = withdrawal - statuses
+        assert not missing, f"the corpus no longer covers: {sorted(missing)}"
+
+    def test_every_vector_carries_the_key_state_its_verdict_depends_on(self):
+        # A vector without its ``key`` block is judged against the default active
+        # keyring, which silently turns a withdrawal case into an ordinary one.
+        for v in VECTORS["vectors"]:
+            assert isinstance(v.get("key"), dict), f"{v['name']} carries no key block"
+            assert "status" in v["key"], f"{v['name']} names no key status"
+
     def test_the_signed_bytes_are_reconstructed_identically(self):
         # verify.js:89 states this string must be byte-identical across the two
         # implementations. It is the whole basis of cross-language agreement.
