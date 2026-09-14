@@ -109,4 +109,4 @@ python3 -m pytest tests/ -q
 
 ## License
 
-Apache-2.0
+MIT

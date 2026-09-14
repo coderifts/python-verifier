@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "coderifts-verifier"
 version = "0.1.0"
 description = "Offline verifier for CodeRifts chain receipts and DSSE/in-toto envelopes. Ed25519, no network."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 # A real dependency is correct here: this package verifies signatures. It is a
 # different artifact from the coderifts SDK, which is deliberately crypto-free
