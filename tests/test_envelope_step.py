@@ -116,3 +116,45 @@ class TestCrossLanguage:
         r = verify_receipt(v["token"], {"ctx": {"keyring": _keyring()}, "envelope": v["envelope"]})
         assert "next_agent_step" not in r
         assert "next_agent_step" not in r.get("payload", {})
+
+
+class TestDoesNotProveIsSigned:
+    """1961/III TAG 2 -- the limits are under the signature, and tearing them off is detectable.
+
+    THE PAIR IS THE ASSERTION. "Stripped fails" alone would also hold for a verifier that rejects
+    everything; "bound verifies" alone would only show the field is tolerated. Together they say
+    the thing that matters: the limits are part of what the receipt attests, so nobody can strip
+    them and pass the remainder on as ours.
+    """
+
+    def test_CONTROL_an_envelope_carrying_the_limits_verifies(self):
+        v = BY_NAME.get("DNP-BOUND")
+        assert v, "DNP-BOUND missing -- regenerate receipt-verifier/test/gen-envelope-step-vectors.js"
+        assert v["envelope"].get("does_not_prove"), "the control must actually carry the field"
+        r = verify_receipt(v["token"], {"ctx": {"keyring": _keyring()}, "envelope": v["envelope"]})
+        assert r["valid"] is True
+        assert r["status"] == "VERIFIED_CURRENT"
+
+    def test_THE_POINT_stripping_the_limits_is_INVALID_SIGNATURE(self):
+        v = BY_NAME.get("DNP-STRIPPED")
+        assert v, "DNP-STRIPPED missing"
+        assert "does_not_prove" not in v["envelope"], "the vector must actually be stripped"
+        r = verify_receipt(v["token"], {"ctx": {"keyring": _keyring()}, "envelope": v["envelope"]})
+        assert r["valid"] is False
+        assert r["status"] == "INVALID_SIGNATURE"
+        assert r["reason"] == "body_hash_mismatch"
+
+    def test_python_and_javascript_agree_on_both(self):
+        for name in ("DNP-BOUND", "DNP-STRIPPED"):
+            v = BY_NAME[name]
+            r = verify_receipt(v["token"], {"ctx": {"keyring": _keyring()}, "envelope": v["envelope"]})
+            assert {"valid": r["valid"], "status": r["status"]} == {
+                "valid": v["js"]["valid"], "status": v["js"]["status"]
+            }, f"{name}: Python and JavaScript disagree"
+
+    def test_the_pair_shares_one_token_and_differs_only_in_that_key(self):
+        a, b = BY_NAME["DNP-BOUND"], BY_NAME["DNP-STRIPPED"]
+        assert a["token"] == b["token"], "different tokens would make this 'a bad receipt fails'"
+        stripped = {k: val for k, val in a["envelope"].items() if k != "does_not_prove"}
+        assert stripped == b["envelope"], "the vectors differ elsewhere -- the finding is unattributable"
+
