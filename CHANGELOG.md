@@ -5,6 +5,37 @@ carries them; a heading with no tag has not been published.
 
 ## Unreleased — next minor
 
+### The no-flag default is now OFFLINE (P-2)
+
+**Changed.** Running the verifier with no `--key` / `--keys` / `--fetch` now verifies against a
+**vendored key snapshot** shipped with the package (`coderifts_verifier/keys/coderifts-keys.json`)
+and makes **no network call**. Previously it fetched
+`https://app.coderifts.com/.well-known/coderifts-keys.json`.
+
+**Why.** `verify.js` with no flags has always read a vendored snapshot, so "no flags" meant two
+different things in two implementations of the same format: one phoned home, the other did not.
+A verifier's first promise is "you can check this yourself, without us", and a default that
+fetches makes the quiet case — verifying on a laptop with no network, or inside a sealed build —
+the one that needs a flag. Fetching is still one flag away (`--fetch <url>`, `--keys <url>`), and
+it is the case that deserves to be explicit.
+
+**Who is affected.** Anyone relying on the old implicit fetch to pick up a rotated key without
+passing a flag. The remedy is one flag: `--fetch` (or `--keys <url>`) restores the previous
+behaviour exactly. The snapshot's digest is pinned beside it and the refresh step is documented in
+`coderifts_verifier/keys/README.md` — it must be refreshed in **both** verifier repositories
+together, and `tests/test_vendored_keys.py` asserts byte equality against the sibling checkout
+when one is present.
+
+**Packaging.** The snapshot is declared as setuptools `package-data` so it ships in the wheel —
+verified by building one, not by reading the config. (A first attempt declared it under
+`[tool.hatch…]`, which this project does not use; an inert build setting is worse than a missing
+one, because the repository looks as though the question was handled.)
+
+**`discovery_was_mandatory({})` is now `False`.** The no-flag path is not discovery, so a failed
+read on it is a local file problem (usage error) rather than `REGISTRY_UNREACHABLE`.
+
+Version unchanged; the next minor carries this.
+
 ### `REGISTRY_UNREACHABLE` is now reachable from the CLI (1961/7.2)
 
 **Added, additive.** A MANDATORY key discovery that fails — `--fetch <url>`, `--keys <url>`, or

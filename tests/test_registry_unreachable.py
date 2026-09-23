@@ -46,15 +46,22 @@ class TestDiscoveryWasMandatory:
         assert discovery_was_mandatory({"keys_source": "/abs/registry.json"}) is False
         assert discovery_was_mandatory({"key_file": "pub.pem"}) is False
 
-    def test_the_no_flag_default_is_the_network_HERE_and_that_differs_from_verify_js(self):
-        """MEASURED DIVERGENCE, pinned so it cannot drift unnoticed.
+    def test_the_no_flag_default_is_OFFLINE_in_both_implementations_now(self):
+        """THE DIVERGENCE THIS TEST RECORDED IS CLOSED -- deliberately, and this says so.
 
-        verify.js with no flags reads a VENDORED SNAPSHOT (offline); this module fetches
-        DEFAULT_FETCH_URL. So "no flags" means different things in the two implementations, and
-        that is a product decision rather than a bug in either. It is asserted here so a future
-        reader meets the difference in a test instead of in an incident.
+        Yesterday this asserted the opposite: that ``discovery_was_mandatory({})`` was True here
+        and False in verify.js, because this module fetched with no flags while verify.js read a
+        vendored snapshot. The test refused to resolve it, calling it "a product decision rather
+        than a bug in either" and pinning it so a future reader would meet it in a test instead of
+        an incident. Peter chose OFFLINE for both (P-2), so the no-flag path now loads the vendored
+        snapshot and is not discovery.
+
+        Kept rather than deleted: the coverage still matters, and inverting the assertion is how a
+        closed divergence stays closed.
         """
-        assert discovery_was_mandatory({}) is True
+        assert discovery_was_mandatory({}) is False
+        # And the offline default is therefore NOT a case that can report a registry outage.
+        assert discovery_was_mandatory({"key_file": "pub.pem"}) is False
 
 
 class TestTheVerdict:

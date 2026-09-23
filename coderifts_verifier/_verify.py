@@ -29,6 +29,8 @@ import base64
 import hashlib
 import json
 import math
+import os
+import pathlib
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -38,6 +40,20 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 DEFAULT_FETCH_URL = "https://app.coderifts.com/.well-known/coderifts-keys.json"
+# P-2 (2026-09-23) -- THE NO-FLAG DEFAULT IS OFFLINE, matching verify.js.
+#
+# WARNING -- THIS CHANGED, AND THE OLD BEHAVIOUR IS WORTH NAMING. Until now, running this verifier
+# with no --key/--keys/--fetch FETCHED the live registry, while verify.js with no flags read a
+# VENDORED SNAPSHOT. So "no flags" meant two different things in two implementations of the same
+# format: one made a network call, the other did not. The previous round measured that divergence
+# and refused to resolve it on its own authority -- which default is correct is a product decision,
+# not something a status helper may decide. Peter chose OFFLINE for both, and this is that change.
+#
+# WHY OFFLINE IS THE RIGHT DEFAULT rather than merely the agreed one: a verifier's first promise
+# is "you can check this yourself, without us". A default that phones home makes the quiet case --
+# someone verifying a receipt on a laptop with no network, or inside a sealed build -- the one that
+# needs a flag. Fetching is still one flag away, and it is the case that deserves to be explicit.
+VENDORED_KEYS_PATH = str(pathlib.Path(__file__).resolve().parent / "keys" / "coderifts-keys.json")
 SIGNING_PREFIX = "crchain.v1"
 MAX_SUPPORTED_V = 4
 SIGNED_FIELDS = ["kid", "fp", "prev", "caller", "ts", "reg", "ir", "expires_at", "bh"]
@@ -67,6 +83,8 @@ def is_expired_at(expires_at_ms, now_ms, context=None):
     return (float(expires_at_ms) + expiry_leeway_ms(context)) < float(now_ms)
 USAGE = (
     "usage: python3 verify.py <receipt> [--key pub.pem | --keys <url|file>] [--kid <kid>] [--fetch <url>]\n"
+    "       python3 verify.py --from-commit <sha> [--repo <path>] [--key pub.pem | --keys <url|file>]\n"
+    "                   reads the CodeRifts-Receipt trailer or .coderifts/receipts/<sha>.json\n"
     "                  [--envelope <file>] [--audience <a>] [--environment <e>]\n"
     "       python3 verify.py --chain receipts.txt [--key pub.pem | --keys <url|file>] [--kid <kid>] [--fetch <url>]\n"
 )
@@ -428,25 +446,27 @@ def registry_unreachable_verdict(source, err):
 def discovery_was_mandatory(opts):
     """Did the operator ask for the network? A file path did not.
 
-    WARNING -- A MEASURED DIVERGENCE FROM verify.js, and it is a real one rather than an
-    oversight in either: with no flags at all, verify.js reads a VENDORED SNAPSHOT (offline) while
-    this module FETCHES ``DEFAULT_FETCH_URL``. So the no-flag default is mandatory discovery here
-    and is not there. Recorded rather than silently smoothed over: making the two agree is a
-    product decision about what "no flags" should mean, not something a status helper may decide.
+    WARNING -- THE DIVERGENCE THIS DOCSTRING USED TO RECORD IS NOW CLOSED (P-2, 2026-09-23). It
+    said that with no flags verify.js read a vendored snapshot while this module fetched, so the
+    no-flag default was mandatory discovery here and was not there. Peter chose OFFLINE for both;
+    the default now loads ``VENDORED_KEYS_PATH`` and makes no network call, so it is NOT mandatory
+    discovery in either implementation. Kept as a note rather than deleted: the next reader is
+    better served by knowing the two once disagreed than by finding a function that looks as
+    though it always agreed.
     """
     if opts.get("fetch_url"):
         return True
     source = opts.get("keys_source")
     if isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
         return True
-    # No --key, no --keys: this implementation's default path is the network.
-    return not opts.get("keys_source") and not opts.get("key_file")
+    # No --key, no --keys, no --fetch: the vendored snapshot. Offline is not discovery.
+    return False
 
 
 def parse_args(argv):
     opts = {"receipt": None, "chain_file": None, "key_file": None, "keys_source": None,
             "kid": None, "fetch_url": None, "envelope_file": None, "audience": None,
-            "environment": None, "help": False}
+            "environment": None, "help": False, "from_commit": None, "repo": None}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -465,6 +485,13 @@ def parse_args(argv):
         elif a == "--fetch":
             i += 1
             opts["fetch_url"] = argv[i] if i < len(argv) else None
+        # 1961 TAG 1 -- read the receipt off a commit instead of the command line.
+        elif a == "--from-commit":
+            i += 1
+            opts["from_commit"] = argv[i] if i < len(argv) else None
+        elif a == "--repo":
+            i += 1
+            opts["repo"] = argv[i] if i < len(argv) else None
         elif a == "--envelope":
             i += 1
             opts["envelope_file"] = argv[i] if i < len(argv) else None
@@ -485,6 +512,13 @@ def parse_args(argv):
         i += 1
     if opts["key_file"] and opts["keys_source"]:
         raise ValueError("--key and --keys are mutually exclusive")
+    # A receipt from a commit AND one on the command line is an ambiguity, not a convenience:
+    # silently preferring one would verify a token the operator did not think they were asking
+    # about.
+    if opts["from_commit"] and opts["receipt"]:
+        raise ValueError("--from-commit and a positional receipt are mutually exclusive")
+    if opts["from_commit"] and opts["chain_file"]:
+        raise ValueError("--from-commit and --chain are mutually exclusive")
     return opts
 
 
@@ -496,6 +530,22 @@ def main():
     if opts["help"]:
         sys.stdout.write(USAGE)
         sys.exit(2)
+    # 1961 TAG 1 -- resolve the receipt from a commit before anything else needs it.
+    #
+    # WARNING -- ANY FAILURE HERE IS A USAGE ERROR (exit 2), NOT A VERDICT. "no receipt is
+    # attached to this commit" is not a statement about a receipt: there is no receipt to have an
+    # opinion about. Emitting valid:false would be a verdict on a token never presented.
+    from_commit_envelope = None
+    if opts["from_commit"]:
+        try:
+            from ._from_commit import receipt_for_commit
+            found = receipt_for_commit(opts["from_commit"], cwd=opts["repo"] or os.getcwd())
+            opts["receipt"] = found["token"]
+            from_commit_envelope = found["envelope"]
+            sys.stderr.write("receipt for %s via %s\n" % (found["sha"], found["carrier"]))
+        except Exception as e:
+            fail(str(e))
+
     if not opts["chain_file"] and not opts["receipt"]:
         fail("no receipt provided")
 
@@ -507,12 +557,16 @@ def main():
             with open(opts["key_file"], "r", encoding="utf-8") as fh:
                 public_key = key_from_pem(fh.read())
             ctx = {"public_key": public_key, "expected_kid": opts["kid"]}
-        else:
-            info = fetch_key_document(opts["fetch_url"] or DEFAULT_FETCH_URL)
+        elif opts["fetch_url"]:
+            # Opt-in live discovery. Explicit, because it is the case that makes a network call.
+            info = fetch_key_document(opts["fetch_url"])
             if info.get("keyring"):
                 ctx = {"keyring": info["keyring"], "expected_kid": opts["kid"]}
             else:
                 ctx = {"public_key": info["public_key"], "expected_kid": opts["kid"] or info.get("kid")}
+        else:
+            # P-2: default = vendored snapshot, no network. Same as verify.js with no flags.
+            ctx = {"keyring": load_keyring(VENDORED_KEYS_PATH), "expected_kid": opts["kid"]}
     except Exception as e:
         # A FAILED MANDATORY DISCOVERY IS A VERDICT, NOT A USAGE ERROR: structured status on
         # stdout and the verdict exit code, so a machine can tell an outage from a mistyped flag.
@@ -524,7 +578,7 @@ def main():
             sys.exit(1)
         fail("could not load public key: " + str(e))
 
-    envelope = None
+    envelope = from_commit_envelope
     if opts["envelope_file"]:
         try:
             with open(opts["envelope_file"], "r", encoding="utf-8") as fh:
