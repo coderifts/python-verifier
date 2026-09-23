@@ -393,6 +393,56 @@ def fail(msg):
     sys.exit(2)
 
 
+def registry_unreachable_verdict(source, err):
+    """1961/7.2 -- discovery failed is NOT "this key is not ours".
+
+    MEASURED 2026-09-23, before the fix: a discovery that could not complete left this CLI in
+    ``fail()`` -- free text on stderr, exit 2, the same shape as a mistyped flag. Nothing on
+    stdout, so a caller parsing the verdict document got no status at all. And where an empty or
+    stale keyring did reach the verifier, the receipt came back ``UNKNOWN_KEY``, which reads as
+    "signed by a key we do not publish" -- forgery-shaped -- when the truth was "we could not ask".
+
+    NOTHING IS LOOSENED. Both answers are ``valid: False``. What changes is where the operator is
+    sent: to their own network, or to the signer. ``REGISTRY_UNREACHABLE`` is already normative in
+    RECEIPT_FORMAT.md 7.1, so this is the code catching up with the published format.
+
+    Byte-identical in shape to cli.js ``registryUnreachableVerdict`` -- the two implementations
+    must not describe the same outage differently.
+    """
+    return {
+        "valid": False,
+        "status": "REGISTRY_UNREACHABLE",
+        "reason": "registry_unreachable",
+        "registry_unreachable": {
+            "source": source,
+            "why": "discovery was requested and could not be completed: " + str(err),
+            "remedy": (
+                "retry when the registry is reachable, or verify offline against a pinned keyring "
+                "(--keys <file>, or the vendored snapshot with no flags). An offline verdict is a "
+                "verdict about the keys you pinned, not about the registry as it stands now."
+            ),
+        },
+    }
+
+
+def discovery_was_mandatory(opts):
+    """Did the operator ask for the network? A file path did not.
+
+    WARNING -- A MEASURED DIVERGENCE FROM verify.js, and it is a real one rather than an
+    oversight in either: with no flags at all, verify.js reads a VENDORED SNAPSHOT (offline) while
+    this module FETCHES ``DEFAULT_FETCH_URL``. So the no-flag default is mandatory discovery here
+    and is not there. Recorded rather than silently smoothed over: making the two agree is a
+    product decision about what "no flags" should mean, not something a status helper may decide.
+    """
+    if opts.get("fetch_url"):
+        return True
+    source = opts.get("keys_source")
+    if isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
+        return True
+    # No --key, no --keys: this implementation's default path is the network.
+    return not opts.get("keys_source") and not opts.get("key_file")
+
+
 def parse_args(argv):
     opts = {"receipt": None, "chain_file": None, "key_file": None, "keys_source": None,
             "kid": None, "fetch_url": None, "envelope_file": None, "audience": None,
@@ -464,6 +514,14 @@ def main():
             else:
                 ctx = {"public_key": info["public_key"], "expected_kid": opts["kid"] or info.get("kid")}
     except Exception as e:
+        # A FAILED MANDATORY DISCOVERY IS A VERDICT, NOT A USAGE ERROR: structured status on
+        # stdout and the verdict exit code, so a machine can tell an outage from a mistyped flag.
+        # An unreadable LOCAL file stays a usage error -- dressing an operator's own bad path as a
+        # registry outage would send them to the network to debug a filename.
+        if discovery_was_mandatory(opts):
+            source = opts["fetch_url"] or opts["keys_source"] or DEFAULT_FETCH_URL
+            sys.stdout.write(json.dumps(registry_unreachable_verdict(source, e)) + "\n")
+            sys.exit(1)
         fail("could not load public key: " + str(e))
 
     envelope = None
