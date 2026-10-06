@@ -5,6 +5,24 @@ carries them; a heading with no tag has not been published.
 
 ## Unreleased — next minor
 
+### `--from-commit` binds the receipt to the commit asked about (P58)
+
+**Fixed.** A sidecar receipt copied beside another commit (the T15 force-push) verified
+`VERIFIED_CURRENT`: the signature and the envelope's body hash were checked, but nothing compared the
+envelope with the commit. Now, after a valid signature:
+
+- the envelope's `head` must name the commit (full SHA, or a 7–39 hex abbreviation as its prefix),
+  else `RECEIPT_COMMIT_MISMATCH`, naming both;
+- `--contract <path>` (repeatable, at most 6, only with `--from-commit`) recomputes `artifact_digest`
+  from the files at the envelope's `base` and at the commit, else `CONTENT_MISMATCH`;
+- a sidecar without an envelope, or an envelope without `head`, is `RECEIPT_NOT_BOUND_TO_COMMIT`;
+- a trailer-only receipt keeps its verdict, and stderr says it binds nothing checkable.
+
+On a failure: `valid: false`, `status` = the code, `signature_status` = what the signature alone said,
+`commit_binding: {status, head, content}`, exit 1. The same rules, codes and fields as
+`receipt-verifier` (`commit-binding.js`, 3e5ef59); `tests/test_from_commit_p58_binding.py` runs the
+same fixtures through both CLIs.
+
 ### The no-flag default is now OFFLINE (P-2)
 
 **Changed.** Running the verifier with no `--key` / `--keys` / `--fetch` now verifies against a

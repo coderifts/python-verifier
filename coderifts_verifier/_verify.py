@@ -83,7 +83,7 @@ def is_expired_at(expires_at_ms, now_ms, context=None):
     return (float(expires_at_ms) + expiry_leeway_ms(context)) < float(now_ms)
 USAGE = (
     "usage: python3 verify.py <receipt> [--key pub.pem | --keys <url|file>] [--kid <kid>] [--fetch <url>]\n"
-    "       python3 verify.py --from-commit <sha> [--repo <path>] [--key pub.pem | --keys <url|file>]\n"
+    "       python3 verify.py --from-commit <sha> [--repo <path>] [--contract <path>]... [--key pub.pem | --keys <url|file>]\n"
     "                   reads the CodeRifts-Receipt trailer or .coderifts/receipts/<sha>.json\n"
     "                  [--envelope <file>] [--audience <a>] [--environment <e>]\n"
     "       python3 verify.py --chain receipts.txt [--key pub.pem | --keys <url|file>] [--kid <kid>] [--fetch <url>]\n"
@@ -466,7 +466,7 @@ def discovery_was_mandatory(opts):
 def parse_args(argv):
     opts = {"receipt": None, "chain_file": None, "key_file": None, "keys_source": None,
             "kid": None, "fetch_url": None, "envelope_file": None, "audience": None,
-            "environment": None, "help": False, "from_commit": None, "repo": None}
+            "environment": None, "help": False, "from_commit": None, "repo": None, "contracts": []}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -492,6 +492,10 @@ def parse_args(argv):
         elif a == "--repo":
             i += 1
             opts["repo"] = argv[i] if i < len(argv) else None
+        # P58 -- the contract file(s) whose content the receipt's artifact_digest must match.
+        elif a == "--contract":
+            i += 1
+            opts["contracts"].append(argv[i] if i < len(argv) else None)
         elif a == "--envelope":
             i += 1
             opts["envelope_file"] = argv[i] if i < len(argv) else None
@@ -519,6 +523,8 @@ def parse_args(argv):
         raise ValueError("--from-commit and a positional receipt are mutually exclusive")
     if opts["from_commit"] and opts["chain_file"]:
         raise ValueError("--from-commit and --chain are mutually exclusive")
+    if opts["contracts"] and not opts["from_commit"]:
+        raise ValueError("--contract needs --from-commit (it reads the file at that commit)")
     return opts
 
 
@@ -536,12 +542,14 @@ def main():
     # attached to this commit" is not a statement about a receipt: there is no receipt to have an
     # opinion about. Emitting valid:false would be a verdict on a token never presented.
     from_commit_envelope = None
+    from_commit_found = None
     if opts["from_commit"]:
         try:
             from ._from_commit import receipt_for_commit
             found = receipt_for_commit(opts["from_commit"], cwd=opts["repo"] or os.getcwd())
             opts["receipt"] = found["token"]
             from_commit_envelope = found["envelope"]
+            from_commit_found = found
             sys.stderr.write("receipt for %s via %s\n" % (found["sha"], found["carrier"]))
         except Exception as e:
             fail(str(e))
@@ -595,6 +603,32 @@ def main():
         result = verify_chain(tokens, ctx, verify_opts)
     else:
         result = _verify_receipt(opts["receipt"], ctx, verify_opts)
+
+    # P58 (2026-10-05) -- a receipt read off a commit must be ABOUT that commit (_commit_binding.py,
+    # the same rules and codes as receipt-verifier/commit-binding.js). Only after a valid signature: a
+    # forged or broken receipt keeps its own verdict. The envelope checked is the one the signature
+    # covered (an explicit --envelope, else the sidecar's).
+    if from_commit_found and result["valid"]:
+        from ._commit_binding import check_commit_binding
+        try:
+            binding = check_commit_binding(
+                sha=from_commit_found["sha"], carrier=from_commit_found["carrier"], envelope=envelope,
+                cwd=opts["repo"] or os.getcwd(), contracts=opts["contracts"],
+            )
+        except ValueError as e:
+            fail(str(e))
+        if binding.get("note"):
+            sys.stderr.write(binding["note"] + "\n")
+        summary = {"status": binding["status"], "head": binding["head"], "content": binding["content"]}
+        if binding["status"] == "FAILED":
+            result = dict(result)
+            result["valid"] = False
+            result["signature_status"] = result["status"]
+            result["status"] = binding["code"]
+            result["reason"] = binding["reason"]
+            result["commit_binding"] = summary
+        elif binding["status"] == "BOUND":
+            result = dict(result, commit_binding=summary)
 
     sys.stdout.write(json.dumps(result, separators=(",", ":")) + "\n")
     sys.exit(0 if result["valid"] else 1)
