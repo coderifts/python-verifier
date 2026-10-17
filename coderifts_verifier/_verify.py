@@ -248,6 +248,11 @@ def _verify_receipt(token, ctx, opts=None):
         return {"valid": False, "status": "MALFORMED", "reason": "bad_json"}
     if not isinstance(payload, dict):
         return {"valid": False, "status": "MALFORMED", "reason": "bad_json"}
+    # P66 parity with receipt-verifier verify.js (non_string_signed_field), BEFORE the signature, as there:
+    # a signed field is a string; a number or an array is MALFORMED, not a signature mismatch.
+    for k in SIGNED_FIELDS:
+        if k in payload and payload[k] is not None and not isinstance(payload[k], str):
+            return {"valid": False, "status": "MALFORMED", "reason": "non_string_signed_field", "field": k, "payload": payload}
 
     # 3. kid
     entry = resolve_entry(ctx, payload)
@@ -272,7 +277,8 @@ def _verify_receipt(token, ctx, opts=None):
         if isinstance(payload.get(k), str) and "|" in payload[k]:
             return {"valid": False, "status": "INVALID_SIGNATURE", "reason": "delimiter_in_field", "payload": payload}
 
-    # 6. envelope binding (v4)
+    # 6. envelope binding (v4). P66 parity with receipt-verifier cli.js:333 and contract-gate 0.11.9:
+    #    a v1-v3 receipt binds no envelope, so an envelope beside it is not verified -- refuse, never pass.
     if opts.get("envelope") and payload.get("v") == 4:
         rest = dict(opts["envelope"])
         rest.pop("receipt", None)
@@ -603,6 +609,13 @@ def main():
         result = verify_chain(tokens, ctx, verify_opts)
     else:
         result = _verify_receipt(opts["receipt"], ctx, verify_opts)
+        # 1.1.1 / P66 parity with receipt-verifier cli.js: a receipt used as an authorization -- with an
+        # envelope (--envelope or a sidecar) or read off a commit -- must be v4: v1-v3 bind no envelope and
+        # carry no expiry. A bare token with no envelope is still a signature check only.
+        v = (result.get("payload") or {}).get("v") if isinstance(result, dict) else None
+        if (envelope is not None or from_commit_found) and result.get("valid") and result.get("payload") and v != 4:
+            result = dict(result, valid=False, signature_status=result.get("status"), status="RECEIPT_VERSION_UNSUPPORTED",
+                          reason="receipt version v%s binds no envelope and carries no expiry; only a v4 receipt is accepted with an envelope or --from-commit" % v)
 
     # P58 (2026-10-05) -- a receipt read off a commit must be ABOUT that commit (_commit_binding.py,
     # the same rules and codes as receipt-verifier/commit-binding.js). Only after a valid signature: a

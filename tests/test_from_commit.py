@@ -148,7 +148,18 @@ class TestCrossLanguage:
         sha = git_repo.commit("s\n\n%s: %s" % (TRAILER_KEY, TOKEN))
         a = self._run_py(["--from-commit", sha, "--keys", str(KEYS)], git_repo.dir)
         b = self._run_py([TOKEN, "--keys", str(KEYS)], git_repo.dir)
-        assert json.loads(a.stdout) == json.loads(b.stdout)
+        a_doc, b_doc = json.loads(a.stdout), json.loads(b.stdout)
+        # P66 (receipt-verifier 1.1.1+): a receipt read off a commit is used as an authorization, so a
+        # v1-v3 token is RECEIPT_VERSION_UNSUPPORTED there, while the bare token stays a signature check.
+        # The carrier still changes nothing about the signature verdict or the payload.
+        assert a_doc["payload"] == b_doc["payload"]
+        assert b_doc["status"] == "VERIFIED_CURRENT" and b_doc["valid"] is True
+        if b_doc["payload"].get("v") == 4:
+            assert a_doc == b_doc
+        else:
+            assert a_doc["valid"] is False
+            assert a_doc["status"] == "RECEIPT_VERSION_UNSUPPORTED"
+            assert a_doc["signature_status"] == b_doc["status"]
 
     def test_both_CLIs_treat_an_absent_receipt_as_a_USAGE_error(self, git_repo):
         git_repo.commit("bare")
