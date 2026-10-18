@@ -225,10 +225,45 @@ def derive_status(payload, entry, opts):
     return "VERIFIED_CURRENT"
 
 
+# 1.1.4: what a verified receipt token does NOT establish (cli.js RECEIPT_DOES_NOT_PROVE, verbatim; the
+# published sentences: README.md:231-233 and the app's `receipt` does_not_prove scope / sdk wording).
+RECEIPT_DOES_NOT_PROVE = (
+    "it does not prove the agent then stopped. It is evidence about a decision we issued, never about what "
+    "the caller did next.",
+    "that the receipt AUTHORIZES the action you are about to take \u2014 a valid signature is "
+    "authenticity, not authorization. Pass an intended context to the server verify, or use "
+    "authorize() for the execution binding",
+    "that the signing key is still trusted \u2014 REVOCATION and the issuer's clock are not visible "
+    "to any local verifier, including this one. A key compromised a minute ago still verifies here",
+    "that the bytes came from the run you think they did \u2014 this checks ONE token, and \"these "
+    "tokens are one run\" is a property of a set (see cr.evidence.root.v1)",
+)
+
+
+def _v4_envelope_rule(result, opts):
+    """1.1.4 (2026-10-18): a receipt used beside an envelope must be v4 (verify.js v4EnvelopeRule, key-for-key).
+
+    Any envelope object counts, {} included (the JS CLI's truthiness: an empty dict is truthy there);
+    a bare token stays a signature check; verify_chain is unchanged.
+    """
+    opts = opts or {}
+    payload = result.get("payload") if isinstance(result, dict) else None
+    v = payload.get("v") if isinstance(payload, dict) else None
+    if opts.get("envelope") is None or not result.get("valid") or not isinstance(payload, dict) or v == 4:
+        return result
+    out = dict(result)
+    out["valid"] = False
+    out["signature_status"] = result.get("status")
+    out["status"] = "RECEIPT_VERSION_UNSUPPORTED"
+    out["reason"] = ("receipt version v%s binds no envelope and carries no expiry; only a v4 receipt is "
+                     "accepted with an envelope or --from-commit" % v)
+    return out
+
+
 def verify_receipt(token, ctx=None, opts=None):
     from .arity import split3
     c, o = split3("verify_receipt", ctx, opts)
-    return _verify_receipt(token, c, o)
+    return _v4_envelope_rule(_verify_receipt(token, c, o), o)
 
 
 def _verify_receipt(token, ctx, opts=None):
@@ -643,7 +678,13 @@ def main():
         elif binding["status"] == "BOUND":
             result = dict(result, commit_binding=summary)
 
-    sys.stdout.write(json.dumps(result, separators=(",", ":")) + "\n")
+    if not opts.get("chain_file"):
+        # receipt-verifier 1.1.4: the receipt verdict names its limits (cli.js RECEIPT_DOES_NOT_PROVE).
+        result = dict(result)
+        result["does_not_prove"] = list(RECEIPT_DOES_NOT_PROVE)
+    sys.stdout.flush()
+    sys.stdout.buffer.write((json.dumps(result, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8"))
+    sys.stdout.flush()
     sys.exit(0 if result["valid"] else 1)
 
 
