@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderifts-verifier"
-version = "0.1.0"
+version = "0.2.0"
 description = "Offline verifier for CodeRifts chain receipts and DSSE/in-toto envelopes. Ed25519, no network."
 readme = "README.md"
 license = "MIT"

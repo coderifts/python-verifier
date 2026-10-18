@@ -3,7 +3,21 @@
 Versions here are the PyPI package `coderifts-verifier`. Entries land before the release that
 carries them; a heading with no tag has not been published.
 
-## Unreleased — next minor
+## 0.2.0 — 2026-10-18
+
+### A receipt verified beside an envelope must be v4 — in the library, not only the CLI
+
+**Fixed.** `verify_receipt()` now refuses a v1–v3 receipt whenever an envelope is supplied (`{}` included):
+`valid: false`, `status: RECEIPT_VERSION_UNSUPPORTED`, `signature_status` carrying the bare verdict — the
+same shape and reason text as receipt-verifier 1.1.4's `verifyReceipt`. Before, only the CLI applied the
+rule; a library caller verifying a v2 receipt beside a forged ALLOW envelope got `VERIFIED_CURRENT`.
+A bare token stays a signature check; `verify_chain` is unchanged.
+
+### The receipt verdict carries `does_not_prove`
+
+**Added.** The single-receipt CLI verdict ends with `does_not_prove`: the four published sentences
+(receipt-verifier README and the app's `receipt` limits), byte-identical to the JS 1.1.4 CLI output.
+
 
 ### `--from-commit` binds the receipt to the commit asked about (P58)
 
