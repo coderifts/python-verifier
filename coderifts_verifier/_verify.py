@@ -23,6 +23,9 @@ Verification order: structure -> json -> kid -> signature -> delimiter guard -> 
 -> taxonomy status. Statuses (12): VERIFIED_CURRENT, VERIFIED_EXPIRED, VERIFIED_WRONG_AUDIENCE,
 VERIFIED_WRONG_ENVIRONMENT, VERIFIED_SUPERSEDED, VERIFIED_SCOPE_MISMATCH, UNKNOWN_KEY,
 RETIRED_KEY_VALID_AT_ISSUE, INVALID_SIGNATURE, MALFORMED, UNSUPPORTED_VERSION, REGISTRY_UNREACHABLE.
+Key states, in the order of RECEIPT_FORMAT.md 7.1 (receipt-verifier 1.2.1): UNKNOWN_KEY_STATUS, KEY_REVOKED,
+REVOKED_KEY, KEY_RETIRED_AFTER_SIGNING, RETIRED_KEY_UNANCHORED; RETIRED_KEY_VALID_AT_ISSUE is not reachable
+(no anchor input) and REVOKED_KEY_UNDECIDABLE is withdrawn.
 """
 
 import base64
@@ -184,32 +187,37 @@ def derive_status(payload, entry, opts):
     # 1079 B — OPTIONAL timestamps, additive. Absent both fields → continue as before.
     # Signing time is payload.ts (receipts have no iat). revoked_at kills history;
     # retired_at only rejects ts >= retired_at.
+    #
+    # 0.2.1 (2026-11-06): the normative order of RECEIPT_FORMAT.md 7.1, as receipt-verifier 1.2.1
+    # verify.py derive_status: unknown -> revoked -> retired at/after retired_at -> retired before
+    # retired_at without an anchor -> active.
+    #   1. a status this verifier does not know   -> UNKNOWN_KEY_STATUS (above)
+    #   2. revoked                                -> REVOKED_KEY at every signing time; revoked wins over retired_at
+    #   3. retired, ts >= retired_at              -> KEY_RETIRED_AFTER_SIGNING
+    #   4. retired, ts < retired_at, WITH an independent time anchor -> RETIRED_KEY_VALID_AT_ISSUE.
+    #      NOT REACHABLE: this verifier reads no anchor input (no RFC 3161 token, no log inclusion).
+    #   5. retired, ts < retired_at, no anchor    -> RETIRED_KEY_UNANCHORED, not valid
+    #   6. active                                 -> the signature decides
+    # REVOKED_KEY_UNDECIDABLE is withdrawn. MEASURED before (0.2.0): revoked before compromised_at, or
+    # without one, was REVOKED_KEY_UNDECIDABLE; a revoked+retired key after retired_at was
+    # KEY_RETIRED_AFTER_SIGNING; retired before retired_at was RETIRED_KEY_VALID_AT_ISSUE, valid.
     revoked_at = entry.get("revoked_at")
     if isinstance(revoked_at, str) and revoked_at:
         return "KEY_REVOKED"
+    if entry.get("status") == "revoked":
+        return "REVOKED_KEY"
     retired_at = entry.get("retired_at")
+    if entry.get("status") == "retired":
+        issued = _parse_iso(payload.get("ts")) if payload.get("ts") else None
+        retired = _parse_iso(retired_at) if isinstance(retired_at, str) and retired_at else None
+        if issued is None or retired is None:
+            return "INVALID_SIGNATURE"
+        return "KEY_RETIRED_AFTER_SIGNING" if issued >= retired else "RETIRED_KEY_UNANCHORED"
     if isinstance(retired_at, str) and retired_at and payload.get("ts"):
         issued = _parse_iso(payload.get("ts"))
         retired = _parse_iso(retired_at)
         if issued is not None and retired is not None and issued >= retired:
             return "KEY_RETIRED_AFTER_SIGNING"
-    # REVOKED — RECEIPT_FORMAT.md 7.1 (normative); mirrors verify.js deriveStatus exactly.
-    # Both outcomes are valid:false. UNDECIDABLE is not a softer valid.
-    if entry.get("status") == "revoked":
-        at = entry.get("compromised_at")
-        if not isinstance(at, str) or not at:
-            return "REVOKED_KEY_UNDECIDABLE"
-        boundary = _parse_iso(at)
-        issued = _parse_iso(payload.get("ts"))
-        if boundary is None or issued is None:
-            return "REVOKED_KEY_UNDECIDABLE"
-        return "REVOKED_KEY" if issued >= boundary else "REVOKED_KEY_UNDECIDABLE"
-    if entry.get("status") == "retired":
-        issued = _parse_iso(payload.get("ts"))
-        retired = _parse_iso(entry.get("retired_at"))
-        if retired is not None and issued is not None and issued < retired:
-            return "RETIRED_KEY_VALID_AT_ISSUE"
-        return "INVALID_SIGNATURE"
     now = opts["now"] if opts.get("now") is not None else (datetime.now(timezone.utc).timestamp() * 1000)
     if v == 4 and isinstance(payload.get("expires_at"), str):
         exp = _parse_iso(payload["expires_at"])
@@ -326,6 +334,9 @@ def _verify_receipt(token, ctx, opts=None):
     status = derive_status(payload, entry, opts)
     if status == "KEY_REVOKED":
         return {"valid": False, "status": status, "reason": "KEY_REVOKED", "payload": payload}
+    if status == "REVOKED_KEY":
+        at = entry.get("compromised_at")
+        return {"valid": False, "status": status, "compromised_at": at if isinstance(at, str) and at else None, "payload": payload}
     if status == "KEY_RETIRED_AFTER_SIGNING":
         return {"valid": False, "status": status, "reason": "KEY_RETIRED_AFTER_SIGNING", "payload": payload}
     if status == "INVALID_SIGNATURE":
@@ -394,8 +405,8 @@ def keyring_from_document(doc, source):
             "status": k.get("status"),
             "retired_at": k.get("retired_at"),
             "revoked_at": k.get("revoked_at"),
-            # Carried through for the revoked rule (RECEIPT_FORMAT 7.1). Dropping it makes the
-            # rule inert: every revoked key would return UNDECIDABLE regardless of ts.
+            # Carried through for the revoked rule (RECEIPT_FORMAT 7.1): a revoked key is REVOKED_KEY at
+            # every ts, and compromised_at is reported in the result (0.2.1; it no longer decides the status).
             "compromised_at": k.get("compromised_at"),
         }
     return keyring

@@ -3,6 +3,30 @@
 Versions here are the PyPI package `coderifts-verifier`. Entries land before the release that
 carries them; a heading with no tag has not been published.
 
+## 0.2.1 — 2026-11-06
+
+### Security: the revoked key 2026-07-k1 is refused by default
+
+**Fixed.** The released 0.2.0 accepted a receipt signed by the revoked key `2026-07-k1` when run with no
+key flag: `valid: true`, `VERIFIED_CURRENT`, exit 0, measured on 2026-11-06 against the PyPI wheel (sha256
+`660203ad82ccd28136d375c23ccf2498327cfbcb910ea0ef4d877f193add048c`) with receipt-verifier's public
+`test/fixtures-receipt.txt` (ts 2026-08-26T21:21:59.212Z). Two causes: the vendored keyring listed the key
+`active`, and `derive_status` used the order before RECEIPT_FORMAT §7.1.
+
+- The vendored keyring is byte-identical to receipt-verifier v1.2.1 `keys/coderifts-keys.json` (sha256
+  `abf16e94c9a317dc9fed5651ae7a0e3c8d3a9bc03834002aebce3b70364c8957`): `2026-07-k1` is `revoked`,
+  `compromised_at` 2026-07-01T00:00:00.000Z. The same receipt is now `valid: false`, `REVOKED_KEY`, exit 1.
+- Key states in the order of RECEIPT_FORMAT §7.1, as receipt-verifier 1.2.1: a revoked key is `REVOKED_KEY`
+  at every signing time, with `compromised_at` in the result, and wins over `retired_at`; a retired key at or
+  after `retired_at` is `KEY_RETIRED_AFTER_SIGNING`; before `retired_at`, with no independent time anchor, it is
+  the new `RETIRED_KEY_UNANCHORED`, **valid: false**, exit 1 (was `RETIRED_KEY_VALID_AT_ISSUE`, valid, exit 0,
+  which is not reachable without an anchor input). `REVOKED_KEY_UNDECIDABLE` is withdrawn (was returned for a
+  revoked key signed before `compromised_at`, or without one).
+- `tests/xlang-vectors.json` regenerated with receipt-verifier v1.2.1 `scripts/vectors/gen-xlang-vectors.js`.
+- Frozen: byte parity with the JS CLI is no longer maintained, verdict parity is. The cross-language tests
+  compare valid, status, reason, signature_status, commit_binding, payload and the exit code;
+  `does_not_prove` and `verified_with` (receipt-verifier 1.1.4/1.1.5) are not emitted by this package.
+
 ## 0.2.0 — 2026-10-18
 
 ### A receipt verified beside an envelope must be v4 — in the library, not only the CLI

@@ -1,5 +1,11 @@
 # coderifts-verifier (Python)
 
+## Status
+
+Frozen after 0.2.1; security fixes only. The reference verifier is
+[`@coderifts/receipt-verifier`](https://github.com/coderifts/receipt-verifier). This package reads key
+states as RECEIPT_FORMAT §7.1 (receipt-verifier 1.2.1).
+
 Verify a CodeRifts chain receipt — or a DSSE / in-toto envelope carrying one —
 offline, in Python, without calling CodeRifts.
 

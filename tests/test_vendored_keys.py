@@ -8,6 +8,7 @@ implementation that fetched first and happened to get the same answer.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import pathlib
 import subprocess
@@ -96,7 +97,9 @@ class TestParityWithVerifyJs:
         src = cli.read_text()
         assert "VENDORED_KEYS_PATH" in src
         # The js default branch loads the snapshot; neither side fetches without a flag now.
-        assert "loadKeyring(VENDORED_KEYS_PATH)" in src
+        # 0.2.1: was the literal "loadKeyring(VENDORED_KEYS_PATH)"; receipt-verifier 1.1.5 passes a second
+        # argument (loadKeyring(VENDORED_KEYS_PATH, keyringWarnings)), so the call is matched, not the text.
+        assert re.search(r"loadKeyring\(VENDORED_KEYS_PATH\b", src), "cli.js no longer loads the vendored snapshot by default"
 
     def test_the_cli_default_verifies_without_a_network(self):
         """End to end: a bogus kid against the vendored snapshot is UNKNOWN_KEY -- a real verdict,
@@ -109,3 +112,31 @@ class TestParityWithVerifyJs:
         out = json.loads(r.stdout)
         assert out["status"] == "UNKNOWN_KEY"
         assert out["status"] != "REGISTRY_UNREACHABLE", "the default tried to reach a registry"
+
+
+# 0.2.1 (2026-11-06) -- THE SECURITY FIX. The public receipt receipt-verifier/test/fixtures-receipt.txt is signed by
+# 2026-07-k1 (ts 2026-08-26T21:21:59.212Z). The key is revoked, compromised_at 2026-07-01T00:00:00.000Z.
+# MEASURED on the released 0.2.0 (PyPI wheel sha256 660203ad...048c): with no flag it returned valid True,
+# VERIFIED_CURRENT, exit 0, because the vendored keyring listed the key active and derive_status had the old order.
+REVOKED_07_K1_RECEIPT = (
+    "eyJ2IjoyLCJraWQiOiIyMDI2LTA3LWsxIiwiZnAiOiJzaGEyNTY6NjhhYzM4MTNjZjUzYjNiZDMyMDgwMjhmYTYwOWExMWI5YTE3MDEyYjRmNTk5NGFhZmFjZGM3YTc5MzAzOTUyZCIsInByZXYiOiJudWxsIiwiY2FsbGVyIjoiYW5vbiIsInRzIjoiMjAyNi0wOC0yNlQyMToyMTo1OS4yMTJaIiwicmVnIjoiNGY1M2NkYTE4YzJiYWEwYzAzNTRiYjVmOWEzZWNiZTVlZDEyYWI0ZDhlMTFiYTg3M2MyZjExMTYxMjAyYjk0NSJ9"
+    ".V1HOj8SKzT_KBLwlYaEYCziHsaZo390kuHReZg5yByvavNTNOxT1qhANIRc5Av0tJd6PVQvMDahGj8C4nCH8Bg"
+)
+
+
+class TestTheRevokedKeyIsRefusedByDefault:
+    def test_the_vendored_snapshot_marks_2026_07_k1_revoked(self):
+        keys = {k["kid"]: k for k in json.loads(KEYS.read_text())["keys"]}
+        assert keys["2026-07-k1"]["status"] == "revoked"
+        assert keys["2026-07-k1"]["compromised_at"] == "2026-07-01T00:00:00.000Z"
+
+    def test_the_no_flag_cli_refuses_the_07_k1_receipt(self):
+        r = subprocess.run(
+            [sys.executable, "-m", "coderifts_verifier._verify", REVOKED_07_K1_RECEIPT],
+            capture_output=True, text=True, cwd=str(REPO),
+        )
+        out = json.loads(r.stdout)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert out["valid"] is False
+        assert out["status"] == "REVOKED_KEY"
+        assert out["compromised_at"] == "2026-07-01T00:00:00.000Z"

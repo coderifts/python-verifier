@@ -88,11 +88,13 @@ class TestCrossLanguage:
         """
         statuses = {v["js"]["status"] for v in VECTORS["vectors"]}
         withdrawal = {
+            # 0.2.1 (RECEIPT_FORMAT 7.1, receipt-verifier 1.2.1): REVOKED_KEY_UNDECIDABLE is withdrawn and
+            # RETIRED_KEY_VALID_AT_ISSUE is not reachable without an anchor; the unanchored retired case is
+            # RETIRED_KEY_UNANCHORED. Before: the set named the first two.
             "REVOKED_KEY",
-            "REVOKED_KEY_UNDECIDABLE",
             "KEY_REVOKED",
             "KEY_RETIRED_AFTER_SIGNING",
-            "RETIRED_KEY_VALID_AT_ISSUE",
+            "RETIRED_KEY_UNANCHORED",
             "UNKNOWN_KEY_STATUS",
         }
         missing = withdrawal - statuses

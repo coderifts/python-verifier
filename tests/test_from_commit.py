@@ -27,7 +27,11 @@ from coderifts_verifier._from_commit import (  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 JS = pathlib.Path.home() / "receipt-verifier"
-TOKEN = (JS / "test" / "fixtures-receipt.txt").read_text().strip() if (JS / "test" / "fixtures-receipt.txt").exists() else None
+# 0.2.1: receipt-verifier 10t-rv (1.2.0) replaced the real 2026-07-k1 key in test/fixtures-keys.json with a test key
+# (test-fixture-k1) and paired it with test/fixtures-receipt-test-k1.txt. MEASURED before: fixtures-receipt.txt (07-k1)
+# against fixtures-keys.json is UNKNOWN_KEY, so the positive control failed on the pairing, not on the verifier.
+_FIXTURE = JS / "test" / "fixtures-receipt-test-k1.txt"
+TOKEN = _FIXTURE.read_text().strip() if _FIXTURE.exists() else None
 KEYS = JS / "test" / "fixtures-keys.json"
 
 
@@ -125,12 +129,21 @@ class TestCrossLanguage:
         return subprocess.run([node, str(JS / "cli.js"), *args], cwd=str(cwd),
                               capture_output=True, text=True)
 
+    # frozen; byte parity with the JS CLI is not maintained, verdict parity is.
+    # 0.2.1 (2026-11-06): these compared the whole JSON document. MEASURED before: they failed because
+    # receipt-verifier 1.1.4+ adds does_not_prove (and 1.1.5+ verified_with) that this frozen package does not
+    # emit. The fields a caller branches on are compared instead: valid, status, reason, signature_status,
+    # commit_binding, the payload, and the exit code.
+    @staticmethod
+    def _verdict(doc):
+        return {k: doc.get(k) for k in ("valid", "status", "reason", "signature_status", "commit_binding", "payload")}
+
     def test_both_CLIs_reach_the_same_verdict_from_the_same_trailer(self, git_repo):
         sha = git_repo.commit("s\n\n%s: %s" % (TRAILER_KEY, TOKEN))
         args = ["--from-commit", sha, "--keys", str(KEYS)]
         py = self._run_py(args, git_repo.dir)
         js = self._run_js(args, git_repo.dir)
-        assert json.loads(py.stdout) == json.loads(js.stdout), (
+        assert self._verdict(json.loads(py.stdout)) == self._verdict(json.loads(js.stdout)), (
             "Python and JavaScript disagree about a receipt read from the same commit"
         )
         assert py.returncode == js.returncode
@@ -141,7 +154,8 @@ class TestCrossLanguage:
         args = ["--from-commit", sha, "--keys", str(KEYS)]
         py = self._run_py(args, git_repo.dir)
         js = self._run_js(args, git_repo.dir)
-        assert json.loads(py.stdout) == json.loads(js.stdout)
+        assert self._verdict(json.loads(py.stdout)) == self._verdict(json.loads(js.stdout))
+        assert py.returncode == js.returncode
 
     def test_POSITIVE_CONTROL_the_carrier_changes_nothing(self, git_repo):
         """The verdict from a commit must equal the verdict from a pasted token."""

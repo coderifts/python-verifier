@@ -34,6 +34,8 @@ Supported versions
 
 Security fixes are applied to the current published release of each package. Older versions are not patched. Published versions, their commits and their integrity digests are listed in the public release provenance records.
 
+This package is frozen after 0.2.1: security fixes only. Advisory for 0.2.0 and earlier (receipts under the revoked key 2026-07-k1 accepted by default): [ADVISORY-ID], fixed in 0.2.1. See CHANGELOG.md, 0.2.1.
+
 Verifying what we ship
 
 Every published release is pinned in a frozen release set, and the acceptance run that measures it uses only public artifacts: the packages from the registry, the signed tags, and the public provenance records. You can run it yourself — you do not need to take our word for any claim in this file.
