@@ -8,7 +8,7 @@ The same discipline applies here as in the product: every proof CodeRifts emits 
 
 Reporting a vulnerability
 
-Email hello@coderifts.com. Please include what you did, what happened, and what you expected. Do not open a public issue for a suspected vulnerability.
+Email security@coderifts.com. Please include what you did, what happened, and what you expected. Do not open a public issue for a suspected vulnerability.
 
 We aim to acknowledge within three working days. We are a small team; there is no bug bounty.
 
